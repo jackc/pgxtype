@@ -16,8 +16,48 @@ func TestUntypedTextRange(t *testing.T) {
 			err:    nil,
 		},
 		{
+			src:    `[1,2]`,
+			result: UntypedTextRange{Lower: "1", Upper: "2", LowerType: '[', UpperType: ']'},
+			err:    nil,
+		},
+		{
+			src:    `(1,3)`,
+			result: UntypedTextRange{Lower: "1", Upper: "3", LowerType: '(', UpperType: ')'},
+			err:    nil,
+		},
+		{
 			src:    ` [1,2) `,
 			result: UntypedTextRange{Lower: "1", Upper: "2", LowerType: '[', UpperType: ')'},
+			err:    nil,
+		},
+		{
+			src:    `[ foo , bar )`,
+			result: UntypedTextRange{Lower: " foo ", Upper: " bar ", LowerType: '[', UpperType: ')'},
+			err:    nil,
+		},
+		{
+			src:    `["foo","bar")`,
+			result: UntypedTextRange{Lower: "foo", Upper: "bar", LowerType: '[', UpperType: ')'},
+			err:    nil,
+		},
+		{
+			src:    `["f""oo","b""ar")`,
+			result: UntypedTextRange{Lower: `f"oo`, Upper: `b"ar`, LowerType: '[', UpperType: ')'},
+			err:    nil,
+		},
+		{
+			src:    `["f""oo","b""ar")`,
+			result: UntypedTextRange{Lower: `f"oo`, Upper: `b"ar`, LowerType: '[', UpperType: ')'},
+			err:    nil,
+		},
+		{
+			src:    `["","bar")`,
+			result: UntypedTextRange{Lower: ``, Upper: `bar`, LowerType: '[', UpperType: ')'},
+			err:    nil,
+		},
+		{
+			src:    `[f\"oo\,,b\\ar\))`,
+			result: UntypedTextRange{Lower: `f"oo,`, Upper: `b\ar)`, LowerType: '[', UpperType: ')'},
 			err:    nil,
 		},
 	}

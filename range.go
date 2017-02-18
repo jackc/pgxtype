@@ -1,12 +1,11 @@
 package pgxtype
 
 import (
-	"errors"
+	"bytes"
+	"fmt"
+	"io"
 	"unicode"
-	"unicode/utf8"
 )
-
-var errParseRange = errors.New("unable to parse range")
 
 type BoundType byte
 
@@ -24,155 +23,149 @@ type UntypedTextRange struct {
 }
 
 func NewUntypedTextRange(src string) (*UntypedTextRange, error) {
-	lex := &rangeLex{src: src,
-		tr:    &UntypedTextRange{},
-		state: lexLeadingWhitespace,
+	buf := bytes.NewBufferString(src)
+	utr := &UntypedTextRange{}
+
+	skipWhitespace(buf)
+
+	r, _, err := buf.ReadRune()
+	if err != nil {
+		return nil, fmt.Errorf("invalid lower bound: %v", err)
 	}
 
-	var err error
-	for lex.state != nil {
-		lex.state, err = lex.state(lex)
+	if r != '[' && r != '(' {
+		return nil, fmt.Errorf("invalid lower bound %s", string(r))
+	}
+
+	utr.LowerType = BoundType(r)
+
+	r, _, err = buf.ReadRune()
+	if err != nil {
+		return nil, fmt.Errorf("invalid lower value: %v", err)
+	}
+	buf.UnreadRune()
+
+	if r == ',' {
+		utr.LowerType = Unbounded
+	} else {
+		utr.Lower, err = rangeParseValue(buf)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid lower value: %v", err)
 		}
 	}
 
-	return lex.tr, nil
-}
-
-type stateFn func(*rangeLex) (stateFn, error)
-
-type rangeLex struct {
-	src   string
-	start int
-	pos   int
-	width int
-	state stateFn
-	tr    *UntypedTextRange
-}
-
-func (l *rangeLex) next() (r rune) {
-	if l.pos >= len(l.src) {
-		l.width = 0 // because backing up from having read eof should read eof again
-		return 0
+	r, _, err = buf.ReadRune()
+	if err != nil {
+		return nil, fmt.Errorf("missing range separator: %v", err)
+	}
+	if r != ',' {
+		return nil, fmt.Errorf("missing range separator: %v", r)
 	}
 
-	r, l.width = utf8.DecodeRuneInString(l.src[l.pos:])
-	l.pos += l.width
-
-	return r
-}
-
-func (l *rangeLex) unnext() {
-	l.pos -= l.width
-}
-
-func (l *rangeLex) ignore() {
-	l.start = l.pos
-}
-
-func (l *rangeLex) acceptRunFunc(f func(rune) bool) {
-	for f(l.next()) {
+	r, _, err = buf.ReadRune()
+	if err != nil {
+		return nil, fmt.Errorf("invalid upper value: %v", err)
 	}
-	l.unnext()
-}
+	buf.UnreadRune()
 
-func lexLeadingWhitespace(l *rangeLex) (stateFn, error) {
-	switch r := l.next(); {
-	case r == '[' || r == '(':
-		return lexLowerBound, nil
-	case isWhitespace(r):
-		l.skipWhitespace()
-		return lexLeadingWhitespace, nil
-	default:
-		return nil, errParseRange
-	}
-}
-
-func lexLowerBound(l *rangeLex) (stateFn, error) {
-	l.tr.LowerType = BoundType(l.src[l.start])
-	l.start = l.pos
-	return lexLowerValue, nil
-}
-
-func lexLowerValue(l *rangeLex) (stateFn, error) {
-	for {
-		switch r := l.next(); {
-		case r == 0:
-			return nil, errParseRange
-		case r == '"':
-			return lexLowerQuotedValue, nil
-		case r == ',':
-			l.tr.Lower = l.src[l.start : l.pos-1]
-			l.start = l.pos
-			return lexUpperValue, nil
-		default:
+	if r == ')' || r == ']' {
+		utr.UpperType = Unbounded
+	} else {
+		utr.Upper, err = rangeParseValue(buf)
+		if err != nil {
+			return nil, fmt.Errorf("invalid upper value: %v", err)
 		}
 	}
-}
 
-func lexLowerQuotedValue(l *rangeLex) (stateFn, error) {
-	return nil, errors.New("lexLowerQuotedValue not implemented")
-}
-
-func lexUpperValue(l *rangeLex) (stateFn, error) {
-	for {
-		switch r := l.next(); {
-		case r == 0:
-			return nil, errParseRange
-		case r == '"':
-			return lexUpperQuotedValue, nil
-		case r == ')' || r == ']':
-			l.unnext()
-			l.tr.Upper = l.src[l.start:l.pos]
-			l.start = l.pos
-			return lexUpperBound, nil
-		default:
-		}
+	r, _, err = buf.ReadRune()
+	if err != nil {
+		return nil, fmt.Errorf("missing upper bound: %v", err)
 	}
-}
-
-func lexUpperQuotedValue(l *rangeLex) (stateFn, error) {
-	return nil, errors.New("lexUpperQuotedValue not implemented")
-}
-
-func lexUpperBound(l *rangeLex) (stateFn, error) {
-	switch r := l.next(); {
-	case BoundType(r) == Inclusive:
-		l.tr.UpperType = Inclusive
-		return lexTrailingWhitespace, nil
-	case BoundType(r) == Exclusive:
-		l.tr.UpperType = Exclusive
-		return lexTrailingWhitespace, nil
-	default:
-		return nil, errParseRange
+	if r != ')' && r != ']' {
+		return nil, fmt.Errorf("missing upper bound, instead got: %v", string(r))
 	}
-}
-
-func lexTrailingWhitespace(l *rangeLex) (stateFn, error) {
-	switch r := l.next(); {
-	case r == 0:
-		return nil, nil
-	case isWhitespace(r):
-		l.skipWhitespace()
-		return lexTrailingWhitespace, nil
-	default:
-		return nil, errParseRange
+	if utr.UpperType != Unbounded {
+		utr.UpperType = BoundType(r)
 	}
+
+	skipWhitespace(buf)
+
+	if buf.Len() > 0 {
+		return nil, fmt.Errorf("unexpected trailing data: %v", buf.String())
+	}
+
+	return utr, nil
 }
 
-func (l *rangeLex) skipWhitespace() {
+func skipWhitespace(buf *bytes.Buffer) {
 	var r rune
-	for r = l.next(); isWhitespace(r); r = l.next() {
+	var err error
+	for r, _, _ = buf.ReadRune(); unicode.IsSpace(r); r, _, _ = buf.ReadRune() {
 	}
 
-	if r != 0 {
-		l.unnext()
+	if err != io.EOF {
+		buf.UnreadRune()
 	}
-
-	l.ignore()
 }
 
-func isWhitespace(r rune) bool {
-	return unicode.IsSpace(r)
+func rangeParseValue(buf *bytes.Buffer) (string, error) {
+	r, _, err := buf.ReadRune()
+	if err != nil {
+		return "", err
+	}
+	if r == '"' {
+		return rangeParseQuotedValue(buf)
+	}
+	buf.UnreadRune()
+
+	s := &bytes.Buffer{}
+
+	for {
+		r, _, err := buf.ReadRune()
+		if err != nil {
+			return "", err
+		}
+
+		switch r {
+		case '\\':
+			r, _, err = buf.ReadRune()
+			if err != nil {
+				return "", err
+			}
+		case ',', '[', ']', '(', ')':
+			buf.UnreadRune()
+			return s.String(), nil
+		}
+
+		s.WriteRune(r)
+	}
+}
+
+func rangeParseQuotedValue(buf *bytes.Buffer) (string, error) {
+	s := &bytes.Buffer{}
+
+	for {
+		r, _, err := buf.ReadRune()
+		if err != nil {
+			return "", err
+		}
+
+		switch r {
+		case '\\':
+			r, _, err = buf.ReadRune()
+			if err != nil {
+				return "", err
+			}
+		case '"':
+			r, _, err = buf.ReadRune()
+			if err != nil {
+				return "", err
+			}
+			if r != '"' {
+				buf.UnreadRune()
+				return s.String(), nil
+			}
+		}
+		s.WriteRune(r)
+	}
 }
