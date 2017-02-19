@@ -13,6 +13,7 @@ const (
 	Inclusive = BoundType('[')
 	Exclusive = BoundType(')')
 	Unbounded = BoundType('U')
+	Empty     = BoundType('E')
 )
 
 type UntypedTextRange struct {
@@ -23,8 +24,14 @@ type UntypedTextRange struct {
 }
 
 func ParseUntypedTextRange(src string) (*UntypedTextRange, error) {
-	buf := bytes.NewBufferString(src)
 	utr := &UntypedTextRange{}
+	if src == "empty" {
+		utr.LowerType = 'E'
+		utr.UpperType = 'E'
+		return utr, nil
+	}
+
+	buf := bytes.NewBufferString(src)
 
 	skipWhitespace(buf)
 

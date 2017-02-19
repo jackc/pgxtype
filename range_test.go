@@ -60,6 +60,11 @@ func TestParseUntypedTextRange(t *testing.T) {
 			result: UntypedTextRange{Lower: `f"oo,`, Upper: `b\ar)`, LowerType: '[', UpperType: ')'},
 			err:    nil,
 		},
+		{
+			src:    `empty`,
+			result: UntypedTextRange{Lower: "", Upper: "", LowerType: 'E', UpperType: 'E'},
+			err:    nil,
+		},
 	}
 
 	for i, tt := range tests {
