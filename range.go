@@ -22,7 +22,7 @@ type UntypedTextRange struct {
 	UpperType BoundType
 }
 
-func NewUntypedTextRange(src string) (*UntypedTextRange, error) {
+func ParseUntypedTextRange(src string) (*UntypedTextRange, error) {
 	buf := bytes.NewBufferString(src)
 	utr := &UntypedTextRange{}
 

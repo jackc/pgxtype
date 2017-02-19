@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestUntypedTextRange(t *testing.T) {
+func TestParseUntypedTextRange(t *testing.T) {
 	tests := []struct {
 		src    string
 		result UntypedTextRange
@@ -63,7 +63,7 @@ func TestUntypedTextRange(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		r, err := NewUntypedTextRange(tt.src)
+		r, err := ParseUntypedTextRange(tt.src)
 		if err != tt.err {
 			t.Errorf("%d. `%s`: expected err %v, got %v", i, tt.src, tt.err, err)
 			continue

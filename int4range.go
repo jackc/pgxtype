@@ -2,16 +2,37 @@ package pgxtype
 
 import (
 	"io"
+	"strconv"
 )
 
 type Int4range struct {
-	lower     int32
-	upper     int32
-	lowerType BoundType
-	upperType BoundType
+	Lower     int32
+	Upper     int32
+	LowerType BoundType
+	UpperType BoundType
 }
 
 func (r *Int4range) ParseText(src string) error {
+	utr, err := ParseUntypedTextRange(src)
+	if err != nil {
+		return err
+	}
+
+	n, err := strconv.ParseInt(utr.Lower, 10, 32)
+	if err != nil {
+		return err
+	}
+	r.Lower = int32(n)
+
+	n, err = strconv.ParseInt(utr.Upper, 10, 32)
+	if err != nil {
+		return err
+	}
+	r.Upper = int32(n)
+
+	r.LowerType = utr.LowerType
+	r.UpperType = utr.UpperType
+
 	return nil
 }
 
