@@ -41,7 +41,9 @@ func mustConnectPgx(t testing.TB) QueryRowCloser {
 	return &PgxConn{conn: conn}
 }
 
-func mustClose(t testing.TB, conn QueryRowCloser) {
+func mustClose(t testing.TB, conn interface {
+	Close() error
+}) {
 	err := conn.Close()
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package pgxtype
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"unicode"
@@ -10,8 +11,8 @@ import (
 type BoundType byte
 
 const (
-	Inclusive = BoundType('[')
-	Exclusive = BoundType(')')
+	Inclusive = BoundType('i')
+	Exclusive = BoundType('e')
 	Unbounded = BoundType('U')
 	Empty     = BoundType('E')
 )
@@ -39,12 +40,14 @@ func ParseUntypedTextRange(src string) (*UntypedTextRange, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid lower bound: %v", err)
 	}
-
-	if r != '[' && r != '(' {
-		return nil, fmt.Errorf("invalid lower bound %s", string(r))
+	switch r {
+	case '(':
+		utr.LowerType = Exclusive
+	case '[':
+		utr.LowerType = Inclusive
+	default:
+		return nil, fmt.Errorf("missing lower bound, instead got: %v", string(r))
 	}
-
-	utr.LowerType = BoundType(r)
 
 	r, _, err = buf.ReadRune()
 	if err != nil {
@@ -88,11 +91,13 @@ func ParseUntypedTextRange(src string) (*UntypedTextRange, error) {
 	if err != nil {
 		return nil, fmt.Errorf("missing upper bound: %v", err)
 	}
-	if r != ')' && r != ']' {
+	switch r {
+	case ')':
+		utr.UpperType = Exclusive
+	case ']':
+		utr.UpperType = Inclusive
+	default:
 		return nil, fmt.Errorf("missing upper bound, instead got: %v", string(r))
-	}
-	if utr.UpperType != Unbounded {
-		utr.UpperType = BoundType(r)
 	}
 
 	skipWhitespace(buf)
@@ -175,4 +180,107 @@ func rangeParseQuotedValue(buf *bytes.Buffer) (string, error) {
 		}
 		s.WriteRune(r)
 	}
+}
+
+type UntypedBinaryRange struct {
+	Lower     []byte
+	Upper     []byte
+	LowerType BoundType
+	UpperType BoundType
+}
+
+// 0 = ()      = 00000
+// 1 = empty   = 00001
+// 2 = [)      = 00010
+// 4 = (]      = 00100
+// 6 = []      = 00110
+// 8 = )       = 01000
+// 12 = ]      = 01100
+// 16 = (      = 10000
+// 18 = [      = 10010
+// 24 =        = 11000
+
+const emptyMask = 1
+const lowerInclusiveMask = 2
+const upperInclusiveMask = 4
+const lowerUnboundedMask = 8
+const upperUnboundedMask = 16
+
+func ParseUntypedBinaryRange(src []byte) (*UntypedBinaryRange, error) {
+	ubr := &UntypedBinaryRange{}
+
+	if len(src) == 0 {
+		return nil, fmt.Errorf("range too short: %v", len(src))
+	}
+
+	rangeType := src[0]
+	rp := 1
+
+	if rangeType&emptyMask > 0 {
+		if len(src[rp:]) > 0 {
+			return nil, fmt.Errorf("unexpected trailing bytes parsing empty range: %v", len(src[rp:]))
+		}
+		ubr.LowerType = Empty
+		ubr.UpperType = Empty
+		return ubr, nil
+	}
+
+	if rangeType&lowerInclusiveMask > 0 {
+		ubr.LowerType = Inclusive
+	} else if rangeType&lowerUnboundedMask > 0 {
+		ubr.LowerType = Unbounded
+	} else {
+		ubr.LowerType = Exclusive
+	}
+
+	if rangeType&upperInclusiveMask > 0 {
+		ubr.UpperType = Inclusive
+	} else if rangeType&upperUnboundedMask > 0 {
+		ubr.UpperType = Unbounded
+	} else {
+		ubr.UpperType = Exclusive
+	}
+
+	if ubr.LowerType == Unbounded && ubr.UpperType == Unbounded {
+		if len(src[rp:]) > 0 {
+			return nil, fmt.Errorf("unexpected trailing bytes parsing unbounded range: %v", len(src[rp:]))
+		}
+		return ubr, nil
+	}
+
+	if len(src[rp:]) < 4 {
+		return nil, fmt.Errorf("too few bytes for size: %v", src[rp:])
+	}
+	valueLen := int(binary.BigEndian.Uint32(src[rp:]))
+	rp += 4
+
+	val := src[rp : rp+valueLen]
+	rp += valueLen
+
+	if ubr.LowerType != Unbounded {
+		ubr.Lower = val
+	} else {
+		ubr.Upper = val
+		if len(src[rp:]) > 0 {
+			return nil, fmt.Errorf("unexpected trailing bytes parsing range: %v", len(src[rp:]))
+		}
+		return ubr, nil
+	}
+
+	if ubr.UpperType != Unbounded {
+		if len(src[rp:]) < 4 {
+			return nil, fmt.Errorf("too few bytes for size: %v", src[rp:])
+		}
+		valueLen := int(binary.BigEndian.Uint32(src[rp:]))
+		rp += 4
+		ubr.Upper = src[rp : rp+valueLen]
+		rp += valueLen
+	}
+
+	if len(src[rp:]) > 0 {
+		return nil, fmt.Errorf("unexpected trailing bytes parsing range: %v", len(src[rp:]))
+	}
+
+	return ubr, nil
+
 }
